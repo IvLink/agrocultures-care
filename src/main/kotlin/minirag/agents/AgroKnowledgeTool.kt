@@ -1,11 +1,14 @@
 package minirag.agents
 
+import ai.koog.agents.core.tools.ToolCallMetadata
 import ai.koog.agents.core.tools.annotations.LLMDescription
-import ai.koog.agents.core.tools.annotations.Tool
-import ai.koog.agents.core.tools.reflect.ToolSet
+import ai.koog.serialization.JSONSerializer
+import ai.koog.serialization.typeToken
 import minirag.bge_reranker.BgeReranker
 import minirag.config.TOP_RERANK
+import minirag.models.AgroSearchArgs
 import minirag.retrieval.Retriever
+import ai.koog.agents.core.tools.Tool
 
 @LLMDescription(
     "Инструменты для поиска информации в локальной базе знаний " +
@@ -16,26 +19,34 @@ class AgroKnowledgeTool(
     private val reranker: BgeReranker,
     private val chunks: List<String>,
     private val chunkVecs: List<List<Double>>
-) : ToolSet {
+) : Tool<AgroSearchArgs, String>(
+    argsType = typeToken<AgroSearchArgs>(),
+    resultType = typeToken<String>(),
+    name = "searchKnowledge",
+    description = """
+        Ищет в локальной базе знаний информацию о симптомах,
+        диагностике и лечении болезней растений.
 
-    @Tool
-    @LLMDescription(
-        "Ищет в локальной базе знаний информацию о симптомах, " +
-                "диагностике и лечении болезней растений. " +
-                "Используй этот инструмент, когда для ответа нужна " +
-                "информация из агро-справочников."
-    )
-    suspend fun searchKnowledge(
-        @LLMDescription(
-            "Конкретный вопрос для поиска в базе знаний. " +
-                    "Например: 'Какие симптомы фитофтороза томата?' " +
-                    "или 'Чем лечить фитофтороз томата?'"
-        )
-        query: String
-    ): String {
+        Используй этот инструмент, когда для ответа нужна
+        информация из агро-справочников.
+    """.trimIndent()
+) {
 
-        println("\n[tool] searchKnowledge")
-        println("[tool] query: $query")
+    var lastResult: String? = null
+        private set
+
+    fun clearLastResult() {
+        lastResult = null
+    }
+
+    override suspend fun execute(args: AgroSearchArgs): String {
+
+        val query = args.query
+
+        println()
+        println("========== SEARCH KNOWLEDGE ==========")
+        println("query: $query")
+        println("======================================")
 
         val candidates = retriever
             .multiQueryRetrieval(
@@ -45,23 +56,37 @@ class AgroKnowledgeTool(
             )
             .distinct()
 
-        println("[tool] candidates: ${candidates.size}")
+        println("[searchKnowledge] candidates: ${candidates.size}")
 
         val reranked = reranker.multiQueryRerank(
             queries = listOf(query),
             chunks = candidates,
             topN = TOP_RERANK
         )
-        println("\n========== TOOL RESULT ==========")
-        val toolResult = reranked
+
+        val result = reranked
             .flatMap { it.chunks }
+            .distinct()
             .joinToString("\n\n---\n\n")
             .ifBlank {
                 "По этому запросу в базе знаний ничего не найдено."
             }
 
-        println(toolResult)
-        println("========== END TOOL RESULT ==========\n")
-        return toolResult
+        println()
+        println("========== END TOOL RESULT ==========")
+        println(result)
+        println("=====================================")
+        println()
+
+        lastResult = result
+
+        return result
+    }
+
+    override fun encodeResultToString(
+        result: String,
+        serializer: JSONSerializer
+    ): String {
+        return result
     }
 }

@@ -20,36 +20,3 @@ val agroStrategy = strategy<String, String>("agro-rag") {
     edge(sendToolResults forwardTo nodeFinish onTextMessage { true })
     edge(sendToolResults forwardTo executeTools onToolCalls { true })
 }
-
-//enum class UserIntent { TECHNICAL, BILLING, UNKNOWN }
-//
-//val intentClassifierNode by node<String, UserIntent>("intent_classifier") { userInput ->
-//    // Доступ к LLM-клиенту из контекста или DI
-//    val llmClient = context.get<LlmClient>()
-//
-//    // Открываем изменяемую сессию для этой ноды
-//    val response = llmClient.writeSession {
-//        // 1. Задаем системные инструкции (Промпт)
-//        system("""
-//            Ты — классификатор запросов поддержки.
-//            Определи категорию сообщения пользователя.
-//            Возвращай ТОЛЬКО одно слово из списка: TECHNICAL, BILLING, UNKNOWN.
-//            Никакого лишнего текста.
-//        """.trimIndent())
-//
-//        // 2. Добавляем текущий ввод пользователя в историю сессии
-//        user(userInput)
-//
-//        // 3. Вызываем модель (например, GPT-4o или локальную через Ollama)
-//        generate()
-//    }
-//
-//    // Шаг 3. Парсим текстовый ответ модели в строго типизированный Enum Kotlin
-//    val modelTextAnswer = response.text.trim().uppercase()
-//
-//    runCatching {
-//        UserIntent.valueOf(modelTextAnswer)
-//    }.getOrElse {
-//        UserIntent.UNKNOWN
-//    }
-//}

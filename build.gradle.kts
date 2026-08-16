@@ -20,6 +20,7 @@ dependencies {
     implementation("com.microsoft.onnxruntime:onnxruntime:1.28.0")
     implementation("ai.djl.huggingface:tokenizers:0.36.0")
     implementation("ai.koog:koog-agents:1.0.0")
+    implementation(kotlin("reflect"))
 }
 
 application {

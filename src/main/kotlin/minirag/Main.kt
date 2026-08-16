@@ -8,16 +8,17 @@ import ai.koog.prompt.llm.LLMCapability
 import ai.koog.prompt.llm.LLMProvider
 import ai.koog.prompt.llm.LLModel
 import minirag.agents.AgroKnowledgeTool
-import minirag.agents.TestTool
-import ai.koog.prompt.executor.ollama.client.OllamaClient as OllamaClientKoog
 import minirag.bge_reranker.BgeReranker
 import minirag.config.createHttpClient
+import minirag.eval.GroundednessJudge
 import minirag.network.LoggingKoogHttpClientFactory
 import minirag.ollama.OllamaClient
 import minirag.pdf.readPdf
 import minirag.retrieval.Retriever
 import minirag.strategy.agroStrategy
+import minirag.eval.runAgentForEval
 import minirag.text.splitIntoChunks
+import ai.koog.prompt.executor.ollama.client.OllamaClient as OllamaClientKoog
 
 val gemma4 = LLModel(
     provider = LLMProvider.Ollama,
@@ -34,13 +35,6 @@ suspend fun main() {
     val client = createHttpClient()
     val ollama = OllamaClient(client)
 
-//
-//    ollama.testDirectToolResult()
-//
-//    ollama.close()
-//    client.close()
-//    return
-
     val retriever = Retriever(ollama)
     val reranker = BgeReranker(
         modelPath =
@@ -54,9 +48,9 @@ suspend fun main() {
         .trim()
         .trim('"')
 
-    print("Твой вопрос к документу: ")
-    val question = readlnOrNull().orEmpty()
-        .trim()
+//    print("Твой вопрос к документу: ")
+//    val question = readlnOrNull().orEmpty()
+//        .trim()
 
     println("[1/4] читаю PDF...")
     val text = readPdf(pdfPath)
@@ -65,17 +59,6 @@ suspend fun main() {
     println("[2/4] режу на чанки...")
     val chunks = splitIntoChunks(text)
     println("      чанков: ${chunks.size}")
-
-    chunks.forEachIndexed { index, chunk ->
-        if (
-            chunk.contains("Фитофтороз", ignoreCase = true) ||
-            chunk.contains("Phytophthora", ignoreCase = true)
-        ) {
-            println("\n========== CHUNK $index ==========")
-            println(chunk)
-            println("========== END CHUNK $index ==========")
-        }
-    }
 
     println("[3/4] считаю эмбеддинги...")
     val chunkVecs = ollama.embedAll(chunks)
@@ -117,6 +100,7 @@ suspend fun main() {
     val loggingFactory = LoggingKoogHttpClientFactory(
         defaultFactory
     )
+
     @Suppress("UnstableApiUsage")
     val ollamaKoog = OllamaClientKoog(httpClientFactory = loggingFactory)
 
@@ -124,48 +108,71 @@ suspend fun main() {
         promptExecutor = MultiLLMPromptExecutor(ollamaKoog),
         llmModel = gemma4,
         systemPrompt = """
-        Ты агро-помощник.
+    Ты агро-помощник, работающий с локальной агрономической базой знаний.
 
-        Если для ответа нужна информация из локальной базы знаний,
-        используй инструмент searchKnowledge.
+    ОБЯЗАТЕЛЬНО используй searchKnowledge, если вопрос относится к:
+    - болезням растений;
+    - симптомам заболеваний;
+    - возбудителям заболеваний;
+    - условиям развития заболеваний;
+    - мерам борьбы;
+    - лечению;
+    - профилактике;
+    - любой информации, которая может находиться в агрономическом документе.
 
-        Не придумывай сведения, которых нет в результате поиска.
-    """.trimIndent(),
+    Если вопрос относится к агрономической информации, сначала вызови
+    searchKnowledge и только после получения результата сформируй ответ.
+
+    Не отвечай на такой вопрос из собственных знаний.
+
+    Не придумывай сведения, которых нет в результате searchKnowledge.
+""".trimIndent(),
         toolRegistry = ToolRegistry {
-            tools(agroTool)
+            tools(listOf(agroTool))
         },
         strategy = agroStrategy
     )
 
-//    println("[4/4] анализирую вопрос...")
-//
-//    val queries = ollama.decomposeQuestion(question)
-//
-//    println("\n[queries]")
-//    queries.forEach {
-//        println(" - $it")
-//    }
-//    println("\n[поиск]")
-//
-//    val candidateChunks = retriever.multiQueryRetrieval(
-//        questions = queries,
-//        chunks = chunks,
-//        chunkVecs = chunkVecs
-//    ).distinct()
-//
-//    println("\n[reranker] кандидатов: ${candidateChunks.size}")
-//
-//    val rerankResults = reranker.multiQueryRerank(
-//        queries = queries,
-//        chunks = candidateChunks,
-//        topN = TOP_RERANK
-//    )
-//
-//    println(
-//        "[reranker] оставлено: ${
-//            rerankResults.sumOf { it.chunks.size }
-//        } фрагментов до distinct"
-//    )
+    val question = "Какие меры борьбы с фитофторозом указаны в документе?"
+
+    val evalRun = runAgentForEval(
+        agent = agent,
+        agroTool = agroTool,
+        question = question
+    )
+
+    val groundednessJudge = GroundednessJudge(
+        promptExecutor = MultiLLMPromptExecutor(ollamaKoog),
+        model = gemma4
+    )
+
+    val groundedness = groundednessJudge.evaluate(
+        question = question,
+        context = evalRun.retrievedContext,
+        answer = evalRun.answer
+    )
+
+    println()
+    println("========== TOOL ==========")
+    println("searchKnowledge called: ${evalRun.toolCalled}")
+
+    println()
+    println("========== RETRIEVED CONTEXT ==========")
+    println(evalRun.retrievedContext ?: "<NO TOOL RESULT>")
+
+    println()
+    println("========== FINAL ANSWER ==========")
+    println(evalRun.answer)
+
+    println()
+    println("========== GROUNDEDNESS ==========")
+    println("grounded: ${groundedness.grounded}")
+
+    groundedness.unsupportedClaims.forEach {
+        println("- $it")
+    }
+
+    println("==================================")
 
 //    val result = agent.run(
 //        "Используй testTool и скажи, какое число он вернул."
@@ -173,19 +180,6 @@ suspend fun main() {
 //
 //    println("\n========== FINAL ANSWER ==========")
 //    println(result)
-
-
-    println("\n================ ОТВЕТ ================\n")
-    val result = agent.run(question)
-    println(result)
-
-
-//    println(
-//        ollama.answer(
-//            question = question,
-//            rerankResults = rerankResults
-//        )
-//    )
 
     agent.close()
     reranker.close()

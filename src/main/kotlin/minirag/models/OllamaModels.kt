@@ -24,3 +24,12 @@ data class ChatRequest(
 
 @Serializable
 data class ChatOptions(val temperature: Double)
+
+@Serializable
+data class AgroSearchArgs(val query: String)
+
+@Serializable
+data class GroundednessJudgeResult(
+    val grounded: Boolean,
+    val unsupportedClaims: List<String>
+)

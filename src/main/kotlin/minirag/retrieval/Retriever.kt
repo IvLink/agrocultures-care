@@ -18,17 +18,17 @@ class Retriever(private val ollama: OllamaClient) {
             .sortedByDescending { similarities[it] }
             .take(TOP_RETRIEVAL)
 
-        bestIds.forEachIndexed { index, id ->
-            println(
-                """
-            ===== CHUNK $index / id=$id =====
-            similarity = ${"%.3f".format(similarities[id])}
-
-            ${chunks[id]}
-
-            """.trimIndent()
-            )
-        }
+//        bestIds.forEachIndexed { index, id ->
+//            println(
+//                """
+//            ===== CHUNK $index / id=$id =====
+//            similarity = ${"%.3f".format(similarities[id])}
+//
+//            ${chunks[id]}
+//
+//            """.trimIndent()
+//            )
+//        }
 
         return bestIds.map { chunks[it] }
     }
@@ -40,7 +40,7 @@ class Retriever(private val ollama: OllamaClient) {
     ): List<String> {
         val allResults = mutableListOf<String>()
         for (query in questions) {
-            println("\n[query] $query")
+//            println("\n[query] $query")
             val results = topChunks(
                 question = query,
                 chunks = chunks,
