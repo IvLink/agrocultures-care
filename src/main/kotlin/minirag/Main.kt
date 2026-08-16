@@ -107,6 +107,7 @@ suspend fun main() {
     val agent = AIAgent(
         promptExecutor = MultiLLMPromptExecutor(ollamaKoog),
         llmModel = gemma4,
+        temperature = 0.0,
         systemPrompt = """
     Ты агро-помощник, работающий с локальной агрономической базой знаний.
 
@@ -130,7 +131,7 @@ suspend fun main() {
         toolRegistry = ToolRegistry {
             tools(listOf(agroTool))
         },
-        strategy = agroStrategy
+        strategy = agroStrategy,
     )
 
     val question = "Какие меры борьбы с фитофторозом указаны в документе?"
