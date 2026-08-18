@@ -2,13 +2,17 @@ package minirag.retrieval
 
 import minirag.config.TOP_RETRIEVAL
 import minirag.extensions.cosineSimilarity
+import minirag.models.DocumentChunk
 import minirag.models.RetrievedChunk
 import minirag.ollama.OllamaClient
 
-class Retriever(private val ollama: OllamaClient) {
+class Retriever(
+    private val ollama: OllamaClient
+) {
+
     suspend fun topChunks(
         question: String,
-        chunks: List<String>,
+        chunks: List<DocumentChunk>,
         chunkVecs: List<List<Double>>
     ): List<RetrievedChunk> {
 
@@ -20,7 +24,9 @@ class Retriever(private val ollama: OllamaClient) {
             return emptyList()
         }
 
-        val qVec = ollama.embed(listOf(question))[0]
+        val qVec = ollama.embed(
+            listOf(question)
+        )[0]
 
         val similarities = chunkVecs.map { vector ->
             vector.cosineSimilarity(qVec)
@@ -28,19 +34,24 @@ class Retriever(private val ollama: OllamaClient) {
 
         return similarities
             .indices
-            .sortedByDescending { similarities[it] }
+            .sortedByDescending {
+                similarities[it]
+            }
             .take(TOP_RETRIEVAL)
-            .map { chunkId ->
+            .map { chunkIndex ->
+
+                val chunk = chunks[chunkIndex]
+
                 RetrievedChunk(
-                    chunkId = chunkId,
-                    similarity = similarities[chunkId]
+                    chunkId = chunk.id,
+                    similarity = similarities[chunkIndex]
                 )
             }
     }
 
     suspend fun multiQueryRetrieval(
         questions: List<String>,
-        chunks: List<String>,
+        chunks: List<DocumentChunk>,
         chunkVecs: List<List<Double>>
     ): List<RetrievedChunk> {
 
@@ -48,27 +59,25 @@ class Retriever(private val ollama: OllamaClient) {
 
         for (query in questions) {
 
-            val results = topChunks(
+            allResults += topChunks(
                 question = query,
                 chunks = chunks,
                 chunkVecs = chunkVecs
             )
-
-            allResults += results
         }
 
-        /*
-         * Один и тот же chunk может попасть в результаты
-         * нескольких query. Оставляем его один раз.
-         *
-         * При этом сохраняем его лучший similarity.
-         */
         return allResults
-            .groupBy { it.chunkId }
+            .groupBy {
+                it.chunkId
+            }
             .values
             .map { matches ->
-                matches.maxBy { it.similarity }
+                matches.maxBy {
+                    it.similarity
+                }
             }
-            .sortedByDescending { it.similarity }
+            .sortedByDescending {
+                it.similarity
+            }
     }
 }

@@ -2,114 +2,161 @@ package minirag.text
 
 import minirag.config.CHUNK_SIZE
 import minirag.config.OVERLAP
+import minirag.models.DocumentChunk
+import minirag.models.DocumentPage
 
 /**
  * Универсальный chunker документов.
  *
- * Основной принцип:
+ * Chunker не знает предметную область документа: он не ищет
+ * слова вроде "болезни" или "меры борьбы". Вместо этого он
+ * распознаёт СТРУКТУРУ, которую сам документ уже задаёт —
+ * короткие строки-заголовки вида "Заголовок:" — и сохраняет
+ * эту структуру как section у каждого chunk.
  *
- * 1. Сначала сохраняем естественные границы страниц.
- * 2. Если страница помещается в CHUNK_SIZE,
- *    она остаётся одним chunk.
- * 3. Если страница большая, режем её по абзацам.
- * 4. Если абзац слишком большой, режем его с overlap.
- *
- * Chunker НЕ знает:
- * - что такое болезнь;
- * - что такое возбудитель;
- * - где заголовок;
- * - какой у документа тип;
- * - какие поля есть внутри документа.
- *
- * Поэтому один и тот же код работает для:
- * - справочников;
- * - инструкций;
- * - учебников;
- * - технической документации;
- * - документов по удобрениям;
- * - документов по профилактике;
- * - и т.д.
+ * Chunker сохраняет:
+ * - исходную страницу (реальную, из DocumentPage);
+ * - раздел документа (section), если он определяется структурой;
+ * - естественные границы текста;
+ * - id chunk.
  */
-fun splitIntoChunks(text: String): List<String> {
-    val normalized = normalizeText(text)
+fun splitIntoChunks(pages: List<DocumentPage>): List<DocumentChunk> {
 
-    if (normalized.isBlank()) {
-        return emptyList()
+    var nextChunkId = 0
+    val result = mutableListOf<DocumentChunk>()
+
+    for (page in pages) {
+
+        val normalized = normalizeText(page.text)
+
+        if (normalized.isBlank()) {
+            continue
+        }
+
+        val blocks = splitIntoSectionBlocks(normalized)
+
+        for (block in blocks) {
+
+            chunkText(block.text)
+                .forEach { text ->
+
+                    result += DocumentChunk(
+                        id = nextChunkId++,
+                        page = page.number,
+                        text = text,
+                        section = block.section
+                    )
+                }
+        }
     }
 
-    /*
-     * PDFTextStripper обычно сохраняет границу страницы
-     * через form-feed (\u000C).
-     *
-     * Если документ пришёл не из PDF и такой границы нет,
-     * весь документ рассматривается как один поток текста.
-     */
-    val pages = normalized
-        .split('\u000C')
-        .map { it.trim() }
-        .filter { it.isNotBlank() }
-
-    return pages.flatMap { page ->
-        chunkPage(page)
-    }
+    return result
 }
 
-/**
- * Нормализуем технический мусор, но НЕ уничтожаем структуру документа.
- */
 private fun normalizeText(text: String): String {
     return text
         .replace("\r\n", "\n")
         .replace('\r', '\n')
-        /*
-         * Не трогаем \u000C.
-         * Это граница страницы, она нужна выше.
-         */
         .replace(Regex("[ \t]+"), " ")
         .replace(Regex("\n{3,}"), "\n\n")
         .trim()
 }
 
-/**
- * Обрабатывает одну страницу.
- */
-private fun chunkPage(page: String): List<String> {
+private data class SectionBlock(
+    val section: String?,
+    val text: String
+)
 
-    /*
-     * Если вся страница помещается в chunk,
-     * НЕ РЕЖЕМ ЕЁ.
-     *
-     * Это ключевой момент.
-     *
-     * Например, если на странице находятся:
-     *
-     * Название
-     * Возбудитель
-     * Симптомы
-     * Условия
-     * Меры борьбы
-     *
-     * всё это остаётся одним embedding.
-     */
-    if (page.length <= CHUNK_SIZE) {
-        return listOf(page)
+/*
+ * Заголовок раздела в этих документах — это короткая
+ * самостоятельная строка, заканчивающаяся двоеточием,
+ * например:
+ *
+ *   Возбудитель болезни:
+ *   Меры борьбы:
+ *   Симптомы:
+ *
+ * Это не привязано к конкретным словам предметной области —
+ * работает для любого документа со структурой "Заголовок:".
+ */
+private val sectionHeadingRegex =
+    Regex("""^[А-ЯЁA-Z][А-Яа-яЁёA-Za-z0-9 \-/]{1,58}:$""")
+
+private fun detectSectionHeading(line: String): String? {
+
+    val trimmed = line.trim()
+
+    if (!sectionHeadingRegex.matches(trimmed)) {
+        return null
     }
 
-    /*
-     * Большую страницу сначала пытаемся разбить
-     * по естественным абзацам.
-     */
-    val paragraphs = page
+    return trimmed.removeSuffix(":").trim()
+}
+
+private fun splitIntoSectionBlocks(
+    pageText: String
+): List<SectionBlock> {
+
+    val lines = pageText.split('\n')
+
+    val blocks = mutableListOf<SectionBlock>()
+
+    var currentSection: String? = null
+    var buffer = StringBuilder()
+
+    fun flush() {
+
+        val text = buffer.toString().trim()
+
+        if (text.isNotBlank()) {
+            blocks += SectionBlock(
+                section = currentSection,
+                text = text
+            )
+        }
+
+        buffer = StringBuilder()
+    }
+
+    for (rawLine in lines) {
+
+        val heading = detectSectionHeading(rawLine)
+
+        if (heading != null) {
+            flush()
+            currentSection = heading
+        }
+
+        buffer.append(rawLine).append('\n')
+    }
+
+    flush()
+
+    if (blocks.isEmpty()) {
+        return listOf(
+            SectionBlock(
+                section = null,
+                text = pageText
+            )
+        )
+    }
+
+    return blocks
+}
+
+private fun chunkText(text: String): List<String> {
+
+    if (text.length <= CHUNK_SIZE) {
+        return listOf(text)
+    }
+
+    val paragraphs = text
         .split(Regex("""\n\s*\n+"""))
         .map { it.trim() }
         .filter { it.isNotBlank() }
 
-    /*
-     * Если PDF/text extractor не оставил пустых строк,
-     * разбиваем по строкам.
-     */
     if (paragraphs.size <= 1) {
-        return chunkLongText(page)
+        return chunkLongText(text)
     }
 
     val chunks = mutableListOf<String>()
@@ -118,6 +165,7 @@ private fun chunkPage(page: String): List<String> {
     var currentLength = 0
 
     fun flush() {
+
         if (current.isEmpty()) {
             return
         }
@@ -136,28 +184,20 @@ private fun chunkPage(page: String): List<String> {
 
     for (paragraph in paragraphs) {
 
-        /*
-         * Если сам абзац больше CHUNK_SIZE,
-         * сначала закрываем текущий chunk.
-         */
         if (paragraph.length > CHUNK_SIZE) {
+
             flush()
 
-            /*
-             * Затем режем большой абзац отдельно.
-             */
             chunks += chunkLongText(paragraph)
 
             continue
         }
 
-        /*
-         * Абзац помещается в текущий chunk.
-         */
         if (
             currentLength == 0 ||
             currentLength + paragraph.length + 2 <= CHUNK_SIZE
         ) {
+
             current += paragraph
 
             currentLength += if (currentLength == 0) {
@@ -169,9 +209,6 @@ private fun chunkPage(page: String): List<String> {
             continue
         }
 
-        /*
-         * Следующий абзац уже не помещается.
-         */
         flush()
 
         current += paragraph
@@ -180,68 +217,47 @@ private fun chunkPage(page: String): List<String> {
 
     flush()
 
-    /*
-     * После первичного разбиения добавляем overlap
-     * между соседними chunks.
-     *
-     * Это особенно важно, когда смысл предложения
-     * или секции находится на границе двух chunks.
-     */
     return addOverlap(chunks)
 }
 
-/**
- * Разбивает очень большой текст.
- *
- * Сначала стараемся резать по строкам,
- * затем по предложениям,
- * и только если это невозможно,
- * режем по символам.
- */
-private fun chunkLongText(text: String): List<String> {
+private fun chunkLongText(
+    text: String
+): List<String> {
 
     if (text.length <= CHUNK_SIZE) {
         return listOf(text.trim())
     }
 
-    /*
-     * Сначала используем строки.
-     */
     val lines = text
         .split('\n')
         .map { it.trim() }
         .filter { it.isNotBlank() }
 
     if (lines.size > 1) {
+
         val chunks = packParts(lines)
+
         return addOverlap(chunks)
     }
 
-    /*
-     * Если всё оказалось одной строкой,
-     * пробуем предложения.
-     */
     val sentences = text
         .split(Regex("""(?<=[.!?。！？])\s+"""))
         .map { it.trim() }
         .filter { it.isNotBlank() }
 
     if (sentences.size > 1) {
+
         val chunks = packParts(sentences)
+
         return addOverlap(chunks)
     }
 
-    /*
-     * Совсем крайний случай:
-     * непрерывная строка длиннее CHUNK_SIZE.
-     */
     return splitByCharacters(text)
 }
 
-/**
- * Упаковывает последовательность частей в chunks.
- */
-private fun packParts(parts: List<String>): List<String> {
+private fun packParts(
+    parts: List<String>
+): List<String> {
 
     val chunks = mutableListOf<String>()
 
@@ -249,6 +265,7 @@ private fun packParts(parts: List<String>): List<String> {
     var currentLength = 0
 
     fun flush() {
+
         if (current.isEmpty()) {
             return
         }
@@ -264,8 +281,11 @@ private fun packParts(parts: List<String>): List<String> {
     for (part in parts) {
 
         if (part.length > CHUNK_SIZE) {
+
             flush()
+
             chunks += splitByCharacters(part)
+
             continue
         }
 
@@ -277,9 +297,14 @@ private fun packParts(parts: List<String>): List<String> {
             separatorLength +
             part.length <= CHUNK_SIZE
         ) {
+
             current += part
-            currentLength += separatorLength + part.length
+
+            currentLength +=
+                separatorLength + part.length
+
         } else {
+
             flush()
 
             current += part
@@ -292,14 +317,6 @@ private fun packParts(parts: List<String>): List<String> {
     return chunks
 }
 
-/**
- * Добавляет overlap между соседними chunks.
- *
- * Берём конец предыдущего chunk и добавляем его
- * в начало следующего.
- *
- * При этом не допускаем бесконечного роста chunk.
- */
 private fun addOverlap(
     chunks: List<String>
 ): List<String> {
@@ -315,7 +332,9 @@ private fun addOverlap(
         val current = chunks[index]
 
         if (index == 0) {
+
             result += current
+
             continue
         }
 
@@ -331,26 +350,32 @@ private fun addOverlap(
             .trim()
 
         if (overlap.isBlank()) {
+
             result += current
+
             continue
         }
 
-        /*
-         * Если overlap + current слишком большой,
-         * уменьшаем overlap.
-         */
         val maxOverlap = maxOf(
             0,
             CHUNK_SIZE - current.length - 1
         )
 
         val actualOverlap = overlap
-            .takeLast(minOf(overlap.length, maxOverlap))
+            .takeLast(
+                minOf(
+                    overlap.length,
+                    maxOverlap
+                )
+            )
             .trim()
 
         if (actualOverlap.isBlank()) {
+
             result += current
+
         } else {
+
             result += "$actualOverlap\n\n$current"
         }
     }
@@ -358,10 +383,6 @@ private fun addOverlap(
     return result
 }
 
-/**
- * Последний fallback для текста,
- * который невозможно естественно разделить.
- */
 private fun splitByCharacters(
     text: String
 ): List<String> {
@@ -385,10 +406,6 @@ private fun splitByCharacters(
             break
         }
 
-        /*
-         * Не допускаем отрицательного шага,
-         * даже если кто-то поставит OVERLAP >= CHUNK_SIZE.
-         */
         val step = maxOf(
             1,
             CHUNK_SIZE - OVERLAP

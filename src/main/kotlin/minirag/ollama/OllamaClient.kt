@@ -5,7 +5,6 @@ import io.ktor.client.call.body
 import io.ktor.client.plugins.timeout
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
-import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.contentType
 import kotlinx.serialization.json.Json
@@ -19,7 +18,6 @@ import minirag.models.ChatRequest
 import minirag.models.ChatResponseMessage
 import minirag.models.EmbedRequest
 import minirag.models.EmbedResponse
-import minirag.models.RerankResult
 
 // ── Клиент Ollama: эмбеддинги, декомпозиция вопроса, финальный ответ ─────
 class OllamaClient(private val client: HttpClient) {
@@ -117,54 +115,6 @@ class OllamaClient(private val client: HttpClient) {
             raw = raw,
             question = question
         )
-    }
-
-    // ── ШАГ 5: контекст -> промпт -> /api/chat (готово) ───────────────────
-    suspend fun answer(question: String, rerankResults: List<RerankResult>): String {
-        val context = rerankResults
-            .joinToString("\n\n") { result ->
-                buildString {
-                    append("ПОДЗАПРОС: ")
-                    append(result.query)
-                    append("\n")
-                    append("НАЙДЕННЫЕ ФРАГМЕНТЫ:\n")
-                    result.chunks.forEachIndexed { index, chunk ->
-                        append("\n[Фрагмент ${index + 1}]\n")
-                        append(chunk)
-                    }
-                }
-            }
-
-        val prompt = """
-            Ответь на вопрос, используя ТОЛЬКО найденные фрагменты документа.
-            Если ответа в найденных фрагментах нет — честно скажи,
-            что в документе этого нет.
-
-            Используй найденные фрагменты, относящиеся к соответствующему подзапросу.
-            Если несколько фрагментов описывают одного персонажа, одно действие
-            или одно событие, объедини их.
-            
-            КОНТЕКСТ:
-            $context
-
-            ВОПРОС: $question
-
-            ОТВЕТ:
-        """.trimIndent()
-
-        val response: ChatResponseMessage = client.post("$OLLAMA_URL/api/chat") {
-            contentType(ContentType.Application.Json)
-            setBody(
-                ChatRequest(
-                    model = CHAT_MODEL,
-                    messages = listOf(ChatMessage(role = "user", content = prompt)),
-                    stream = false,
-                    options = ChatOptions(temperature = 0.0)
-                )
-            )
-        }
-            .body()
-        return response.message.content
     }
 
     fun parseQueries(

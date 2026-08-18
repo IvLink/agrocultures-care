@@ -2,9 +2,7 @@ package minirag.eval
 
 import ai.koog.prompt.dsl.prompt
 import ai.koog.prompt.executor.llms.MultiLLMPromptExecutor
-import ai.koog.prompt.executor.ollama.client.OllamaClient
 import ai.koog.prompt.llm.LLModel
-import ai.koog.prompt.message.Message
 import kotlinx.serialization.json.Json
 import minirag.models.GroundednessJudgeResult
 
@@ -12,7 +10,6 @@ class GroundednessJudge(
     private val promptExecutor: MultiLLMPromptExecutor,
     private val model: LLModel
 ) {
-
     private val json = Json {
         ignoreUnknownKeys = true
     }

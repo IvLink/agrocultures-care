@@ -11,9 +11,11 @@ import minirag.agents.AgroKnowledgeTool
 import minirag.bge_reranker.BgeReranker
 import minirag.config.createHttpClient
 import minirag.eval.GroundednessJudge
+import minirag.eval.calibrateThreshold
 import minirag.network.LoggingKoogHttpClientFactory
 import minirag.ollama.OllamaClient
-import minirag.pdf.readPdf
+import minirag.pdf.readPdfPages
+import minirag.retrieval.LexicalRetriever
 import minirag.retrieval.Retriever
 import minirag.strategy.agroStrategy
 import minirag.eval.runAgentForEval
@@ -48,51 +50,49 @@ suspend fun main() {
         .trim()
         .trim('"')
 
-//    print("Твой вопрос к документу: ")
-//    val question = readlnOrNull().orEmpty()
-//        .trim()
+    print("Твой вопрос к документу: ")
+    val question = readlnOrNull().orEmpty()
+        .trim()
 
     println("[1/4] читаю PDF...")
-    val text = readPdf(pdfPath)
-    println("      символов: ${text.length}")
+    val pages = readPdfPages(pdfPath)
+    println("      страниц: ${pages.size}")
 
     println("[2/4] режу на чанки...")
-    val chunks = splitIntoChunks(text)
+    val chunks = splitIntoChunks(pages)
     println("      чанков: ${chunks.size}")
 
     println("[3/4] считаю эмбеддинги...")
-    val chunkVecs = ollama.embedAll(chunks)
+    val chunkVecs = ollama.embedAll(
+        chunks.map { it.text }
+    )
 
     println(
         "      векторов: ${chunkVecs.size}, " +
                 "размерность: ${chunkVecs.firstOrNull()?.size}"
     )
-    val agroTool = AgroKnowledgeTool(
+
+    val lexicalRetriever = LexicalRetriever(chunks)
+
+    println("[4/4] калибрую relevance threshold по eval-набору...")
+    val calibration = calibrateThreshold(
+        ollama = ollama,
         retriever = retriever,
+        lexicalRetriever = lexicalRetriever,
         reranker = reranker,
         chunks = chunks,
         chunkVecs = chunkVecs
     )
 
-//    val testTool = TestTool()
-//
-//    val agent = AIAgent(
-//        promptExecutor = MultiLLMPromptExecutor(OllamaClientKoog()),
-//        llmModel = gemma4,
-//        systemPrompt = """
-//        Ты тестовый ассистент.
-//
-//        Если для ответа нужна информация из инструмента,
-//        используй testTool.
-//
-//        После получения результата инструмента
-//        используй его при формировании ответа.
-//    """.trimIndent(),
-//        toolRegistry = ToolRegistry {
-//            tools(testTool)
-//        },
-//        strategy = agroStrategy
-//    )
+    val agroTool = AgroKnowledgeTool(
+        ollama = ollama,
+        retriever = retriever,
+        lexicalRetriever = lexicalRetriever,
+        reranker = reranker,
+        chunks = chunks,
+        chunkVecs = chunkVecs,
+        relevanceThreshold = calibration.threshold
+    )
 
     @Suppress("UnstableApiUsage")
     val defaultFactory = HttpClientFactoryResolver.resolve()
@@ -124,7 +124,19 @@ suspend fun main() {
     Если вопрос относится к агрономической информации, сначала вызови
     searchKnowledge и только после получения результата сформируй ответ.
 
-    Не отвечай на такой вопрос из собственных знаний.
+    Используй ТОЛЬКО информацию, содержащуюся в результате searchKnowledge.
+
+    Не используй собственные знания для дополнения ответа.
+
+    Не смешивай информацию из разных заболеваний, вредителей,
+    культур или разделов документа.
+
+    Если найденный контекст относится к другому заболеванию или
+    другой теме, не используй его для ответа.
+
+    Если в результате searchKnowledge нет достаточной информации
+    для ответа, прямо сообщи, что в найденном контексте
+    недостаточно информации.
 
     Не придумывай сведения, которых нет в результате searchKnowledge.
 """.trimIndent(),
@@ -133,8 +145,6 @@ suspend fun main() {
         },
         strategy = agroStrategy,
     )
-
-    val question = "Какие меры борьбы с фитофторозом указаны в документе?"
 
     val evalRun = runAgentForEval(
         agent = agent,
@@ -174,13 +184,6 @@ suspend fun main() {
     }
 
     println("==================================")
-
-//    val result = agent.run(
-//        "Используй testTool и скажи, какое число он вернул."
-//    )
-//
-//    println("\n========== FINAL ANSWER ==========")
-//    println(result)
 
     agent.close()
     reranker.close()
