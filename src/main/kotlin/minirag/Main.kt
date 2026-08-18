@@ -64,7 +64,7 @@ suspend fun main() {
 
     println("[3/4] считаю эмбеддинги...")
     val chunkVecs = ollama.embedAll(
-        chunks.map { it.text }
+        chunks.map { it.retrievalText() }
     )
 
     println(

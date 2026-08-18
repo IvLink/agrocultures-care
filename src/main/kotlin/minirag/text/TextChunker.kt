@@ -33,9 +33,9 @@ fun splitIntoChunks(pages: List<DocumentPage>): List<DocumentChunk> {
             continue
         }
 
-        val blocks = splitIntoSectionBlocks(normalized)
+        val pageBlocks = splitIntoSectionBlocks(normalized)
 
-        for (block in blocks) {
+        for (block in pageBlocks.blocks) {
 
             chunkText(block.text)
                 .forEach { text ->
@@ -44,7 +44,8 @@ fun splitIntoChunks(pages: List<DocumentPage>): List<DocumentChunk> {
                         id = nextChunkId++,
                         page = page.number,
                         text = text,
-                        section = block.section
+                        section = block.section,
+                        title = pageBlocks.strayTitle
                     )
                 }
         }
@@ -93,9 +94,70 @@ private fun detectSectionHeading(line: String): String? {
     return trimmed.removeSuffix(":").trim()
 }
 
+private val sentenceTerminators = setOf('.', '!', '?')
+
+/*
+ * Многие PDF со сложной вёрсткой (текстовая колонка + колонка
+ * подписей к фото/заголовок записи рядом) извлекаются
+ * PDFTextStripper НЕ в визуальном порядке: заголовок записи
+ * и подписи к иллюстрациям физически лежат в content stream
+ * после всей текстовой колонки и "приезжают" в конец последнего
+ * распознанного раздела (обычно последнего по странице), а не
+ * туда, где они на самом деле находятся на странице.
+ *
+ * Единственный надёжный (и не привязанный к словам конкретного
+ * документа) сигнал такой "уехавшей" строки — она СТРУКТУРНО
+ * не похожа на продолжение прозы:
+ *
+ * - идёт сразу после уже законченного предложения (иначе это
+ *   вторая строка того же предложения, а не новая мысль);
+ * - сама короткая и самостоятельная, без завершающей пунктуации;
+ * - и, что важнее всего, СЛЕДУЮЩАЯ строка не продолжает её —
+ *   не начинается со строчной буквы. Перенос предложения на
+ *   новую строку (обычное дело при постраничном извлечении PDF)
+ *   почти всегда продолжается строчной буквой на следующей
+ *   строке; самостоятельный заголовок — нет.
+ */
+private fun looksLikeStrayTitleLine(
+    trimmed: String,
+    nextNonBlankLine: String?
+): Boolean {
+
+    /*
+     * Заголовки записей не обязаны быть многословными
+     * ("Столбур" — такой же валидный заголовок, как и
+     * "Фитофтороз (фитофторозная гниль) пасленовых") —
+     * защиту от случайных коротких обрывков даёт не длина
+     * или количество слов, а требование "после законченного
+     * предложения" + "не продолжается следующей строкой".
+     */
+    if (trimmed.length !in 4..70) {
+        return false
+    }
+
+    if (!trimmed.first().isUpperCase()) {
+        return false
+    }
+
+    if (trimmed.last() in sentenceTerminators) {
+        return false
+    }
+
+    if (nextNonBlankLine != null && nextNonBlankLine.first().isLowerCase()) {
+        return false
+    }
+
+    return true
+}
+
+private data class PageBlocks(
+    val blocks: List<SectionBlock>,
+    val strayTitle: String?
+)
+
 private fun splitIntoSectionBlocks(
     pageText: String
-): List<SectionBlock> {
+): PageBlocks {
 
     val lines = pageText.split('\n')
 
@@ -103,6 +165,9 @@ private fun splitIntoSectionBlocks(
 
     var currentSection: String? = null
     var buffer = StringBuilder()
+    var bufferHasContent = false
+    var previousLineEndedSentence = false
+    var strayTitle: String? = null
 
     fun flush() {
 
@@ -116,32 +181,74 @@ private fun splitIntoSectionBlocks(
         }
 
         buffer = StringBuilder()
+        bufferHasContent = false
     }
 
-    for (rawLine in lines) {
+    for (index in lines.indices) {
 
+        val rawLine = lines[index]
+        val trimmedLine = rawLine.trim()
         val heading = detectSectionHeading(rawLine)
 
         if (heading != null) {
             flush()
             currentSection = heading
+            previousLineEndedSentence = false
+            buffer.append(rawLine).append('\n')
+            continue
+        }
+
+        /*
+         * Строка похожа на заголовок записи, "уехавший" в хвост
+         * текущего раздела: у нас уже есть тело раздела, оно
+         * закончено законченным предложением, а эта строка сама
+         * на предложение не похожа и не продолжается следующей
+         * строкой. Отрезаем её вместе со всем, что после неё,
+         * в отдельный блок — не даём ей "загрязнить" смысл
+         * текущего раздела, и запоминаем как заголовок записи
+         * для всех chunks этой страницы.
+         */
+        if (
+            strayTitle == null &&
+            bufferHasContent &&
+            previousLineEndedSentence &&
+            looksLikeStrayTitleLine(
+                trimmed = trimmedLine,
+                nextNonBlankLine = lines
+                    .asSequence()
+                    .drop(index + 1)
+                    .map { it.trim() }
+                    .firstOrNull { it.isNotEmpty() }
+            )
+        ) {
+            flush()
+            strayTitle = trimmedLine
+            currentSection = null
         }
 
         buffer.append(rawLine).append('\n')
+
+        if (trimmedLine.isNotEmpty()) {
+            bufferHasContent = true
+            previousLineEndedSentence = trimmedLine.last() in sentenceTerminators
+        }
     }
 
     flush()
 
     if (blocks.isEmpty()) {
-        return listOf(
-            SectionBlock(
-                section = null,
-                text = pageText
-            )
+        return PageBlocks(
+            blocks = listOf(
+                SectionBlock(
+                    section = null,
+                    text = pageText
+                )
+            ),
+            strayTitle = strayTitle
         )
     }
 
-    return blocks
+    return PageBlocks(blocks = blocks, strayTitle = strayTitle)
 }
 
 private fun chunkText(text: String): List<String> {

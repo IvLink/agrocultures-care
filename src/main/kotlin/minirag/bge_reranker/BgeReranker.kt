@@ -232,7 +232,7 @@ class BgeReranker(
         val results = candidates
             .mapNotNull { candidate ->
                 val chunk = chunksById[candidate.chunkId] ?: return@mapNotNull null
-                val rawScore = scoreChunk(query = query, document = chunk.text)
+                val rawScore = scoreChunk(query = query, document = chunk.retrievalText())
                 val normalizedScore = sigmoid(rawScore)
                 RerankResult(
                     chunkId = chunk.id,
