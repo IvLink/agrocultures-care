@@ -143,6 +143,20 @@ private class LoggingKoogHttpClient(
 }
 
 
+/**
+ * Workaround for a koog-agents bug (present through at least 1.1.1): when converting a
+ * `Message.User` that only wraps a `MessagePart.Tool.Result` (i.e. a tool result, which Koog
+ * encodes as a User message under the hood), `OllamaConverters.toOllamaChatMessages` still emits
+ * a spurious `{"role":"user","content":""}` right before the real `{"role":"tool",...}` message.
+ * Ollama-served small models (e.g. gemma here) sometimes misread that empty turn as "the tool
+ * hasn't answered yet" and stall instead of using the tool result.
+ *
+ * The DTOs are `internal` to the koog-agents module, so we can't fix the converter directly;
+ * instead we drop those empty "user" messages from the raw JSON request body just before it goes
+ * over the wire. One thing to note: this only patches the non-streaming post() path, which is
+ * what you're using ("stream":false in your logs). If you ever switch the agent to streaming,
+ * the same fix would need to be mirrored in sse()/lines().
+ */
 private fun removeEmptyUserMessage(json: String): String {
     val root = Json.parseToJsonElement(json).jsonObject
 
@@ -172,56 +186,3 @@ private fun removeEmptyUserMessage(json: String): String {
         newRoot
     )
 }
-
-/**
- * Workaround for a koog-agents bug (present through at least 1.1.1): when converting a
- * `Message.User` that only wraps a `MessagePart.Tool.Result` (i.e. a tool result, which Koog
- * encodes as a User message under the hood), `OllamaConverters.toOllamaChatMessages` still emits
- * a spurious `{"role":"user","content":""}` right before the real `{"role":"tool",...}` message.
- * Ollama-served small models (e.g. gemma here) sometimes misread that empty turn as "the tool
- * hasn't answered yet" and stall instead of using the tool result.
- *
- * The DTOs are `internal` to the koog-agents module, so we can't fix the converter directly;
- * instead we reflectively drop those empty/content-less "user" messages from the request just
- * before it goes over the wire, and rebuild the request via its own `copy()`.
- * One thing to note: this only patches the non-streaming post() path,
- * which is what you're using ("stream":false in your logs).
- * If you ever switch the agent to streaming, the same fix would need to be mirrored in sse()/lines().
- */
-//@Suppress("UNCHECKED_CAST")
-//private fun <T : Any> stripEmptyToolResultUserTurns(requestBody: T): T {
-//    val kClass = requestBody::class
-//    val messagesProperty = kClass.memberProperties.find { it.name == "messages" } ?: return requestBody
-//    messagesProperty.isAccessible = true
-//    val messages = messagesProperty.call(requestBody) as? List<*> ?: return requestBody
-//
-//    fun isEmptyUserTurn(message: Any?): Boolean {
-//        if (message == null) return false
-//        val messageProperties = message::class.memberProperties
-//        val role = messageProperties.find { it.name == "role" }
-//            ?.apply { isAccessible = true }?.call(message) as? String
-//        val content = messageProperties.find { it.name == "content" }
-//            ?.apply { isAccessible = true }?.call(message) as? String
-//        val images = messageProperties.find { it.name == "images" }
-//            ?.apply { isAccessible = true }?.call(message) as? List<*>
-//        return role == "user" && content.isNullOrBlank() && images.isNullOrEmpty()
-//    }
-//
-//    val filteredMessages = messages.filterNot(::isEmptyUserTurn)
-//    if (filteredMessages.size == messages.size) return requestBody
-//
-//    val dropped = messages.size - filteredMessages.size
-//    println("[LoggingKoogHttpClientFactory] dropped $dropped empty tool-result-artifact 'user' message(s) before sending to Ollama")
-//
-//    val copyFunction = kClass.memberFunctions.find { it.name == "copy" } ?: return requestBody
-//    copyFunction.isAccessible = true
-//    val instanceParameter = copyFunction.instanceParameter ?: return requestBody
-//    val messagesParameter = copyFunction.parameters.find { it.name == "messages" } ?: return requestBody
-//
-//    return copyFunction.callBy(
-//        mapOf(
-//            instanceParameter to requestBody,
-//            messagesParameter to filteredMessages
-//        )
-//    ) as T
-//}

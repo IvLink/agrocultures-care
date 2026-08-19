@@ -4,20 +4,21 @@ import ai.koog.agents.core.tools.Tool
 import ai.koog.agents.core.tools.annotations.LLMDescription
 import ai.koog.serialization.JSONSerializer
 import ai.koog.serialization.typeToken
-import minirag.bge_reranker.BgeReranker
+import kotlin.system.measureTimeMillis
 import minirag.config.MAX_CHUNKS_PER_SECTION
 import minirag.config.MAX_CONTEXT_CHUNKS
 import minirag.models.AgroSearchArgs
 import minirag.models.DocumentChunk
 import minirag.models.RerankResult
+import minirag.models.RetrievedChunk
 import minirag.ollama.OllamaClient
+import minirag.reranker.BgeReranker
 import minirag.retrieval.LexicalRetriever
 import minirag.retrieval.NO_RELEVANT_CONTEXT_MESSAGE
 import minirag.retrieval.Retriever
 import minirag.retrieval.buildCandidatePool
 import minirag.retrieval.buildContext
 import minirag.retrieval.gateRelevant
-import kotlin.system.measureTimeMillis
 
 @LLMDescription(
     "Инструмент поиска информации в локальной базе знаний."
@@ -64,7 +65,7 @@ class AgroKnowledgeTool(
          * 1-3. Query analysis -> dense + lexical retrieval
          * по каждому подзапросу -> candidate pool.
          */
-        var candidates: List<minirag.models.RetrievedChunk> = emptyList()
+        var candidates: List<RetrievedChunk> = emptyList()
         val candidatePoolMs = measureTimeMillis {
             candidates =
                 buildCandidatePool(

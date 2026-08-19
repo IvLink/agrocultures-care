@@ -1,5 +1,11 @@
 # Project exclude paths
 /.gradle/
+/.kotlin/
+/.idea/
 /build/
 /build/classes/
 /build/classes/kotlin/main/
+
+# Reranker ONNX weights/tokenizer — too large for git, see models/README.md
+/models/bge_reranker_v2_m3/onnx/model.onnx_data
+/models/bge_reranker_v2_m3/tokenizer.json

@@ -9,13 +9,15 @@ import ai.koog.prompt.llm.LLMCapability
 import ai.koog.prompt.llm.LLMProvider
 import ai.koog.prompt.llm.LLModel
 import minirag.agents.AgroKnowledgeTool
-import minirag.bge_reranker.BgeReranker
+import minirag.reranker.BgeReranker
 import minirag.config.CHAT_MODEL
 import minirag.config.OLLAMA_NUM_CTX
 import minirag.config.RELEVANCE_THRESHOLD
 import minirag.config.createHttpClient
 import minirag.eval.GroundednessJudge
 import minirag.eval.calibrateThreshold
+import minirag.models.AgentRunResult
+import minirag.models.GroundednessJudgeResult
 import minirag.network.LoggingKoogHttpClientFactory
 import minirag.ollama.OllamaClient
 import minirag.pdf.readPdfPages
@@ -44,10 +46,8 @@ suspend fun main() {
 
     val retriever = Retriever(ollama)
     val reranker = BgeReranker(
-        modelPath =
-            "src/main/kotlin/minirag/models/bge_reranker_v2_m3/onnx/model.onnx",
-        tokenizerPath =
-            "src/main/kotlin/minirag/models/bge_reranker_v2_m3/tokenizer.json"
+        modelPath = "models/bge_reranker_v2_m3/onnx/model.onnx",
+        tokenizerPath = "models/bge_reranker_v2_m3/tokenizer.json"
     )
 
     print("Путь к PDF-файлу: ")
@@ -207,8 +207,8 @@ suspend fun main() {
         strategy = agroStrategy,
     )
 
-    lateinit var evalRun: minirag.models.AgentRunResult
-    lateinit var groundedness: minirag.models.GroundednessJudgeResult
+    lateinit var evalRun: AgentRunResult
+    lateinit var groundedness: GroundednessJudgeResult
 
     val agentMs = measureTimeMillis {
         evalRun = runAgentForEval(

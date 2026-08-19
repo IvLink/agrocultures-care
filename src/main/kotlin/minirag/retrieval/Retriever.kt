@@ -48,36 +48,4 @@ class Retriever(
                 )
             }
     }
-
-    suspend fun multiQueryRetrieval(
-        questions: List<String>,
-        chunks: List<DocumentChunk>,
-        chunkVecs: List<List<Double>>
-    ): List<RetrievedChunk> {
-
-        val allResults = mutableListOf<RetrievedChunk>()
-
-        for (query in questions) {
-
-            allResults += topChunks(
-                question = query,
-                chunks = chunks,
-                chunkVecs = chunkVecs
-            )
-        }
-
-        return allResults
-            .groupBy {
-                it.chunkId
-            }
-            .values
-            .map { matches ->
-                matches.maxBy {
-                    it.similarity
-                }
-            }
-            .sortedByDescending {
-                it.similarity
-            }
-    }
 }
