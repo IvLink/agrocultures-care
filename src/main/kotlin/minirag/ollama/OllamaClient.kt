@@ -10,12 +10,14 @@ import io.ktor.http.contentType
 import kotlinx.serialization.json.Json
 import minirag.config.CHAT_MODEL
 import minirag.config.EMBED_MODEL
+import minirag.config.OLLAMA_NUM_CTX
 import minirag.config.OLLAMA_URL
 import minirag.extensions.cleanJsonResponse
 import minirag.models.ChatMessage
 import minirag.models.ChatOptions
 import minirag.models.ChatRequest
 import minirag.models.ChatResponseMessage
+import minirag.models.DomainClassification
 import minirag.models.EmbedRequest
 import minirag.models.EmbedResponse
 
@@ -109,7 +111,7 @@ class OllamaClient(private val client: HttpClient) {
                             )
                         ),
                         stream = false,
-                        options = ChatOptions(temperature = 0.0)
+                        options = ChatOptions(temperature = 0.0, numCtx = OLLAMA_NUM_CTX)
                     )
                 )
             }
@@ -141,6 +143,79 @@ class OllamaClient(private val client: HttpClient) {
         } catch (_: Exception) {
             println("[decompose] invalid JSON, fallback to original question")
             listOf(question)
+        }
+    }
+
+    /*
+     * Отдельный, дешёвый классификационный запрос вместо того, чтобы
+     * полагаться на то, что tool-calling агент сам решит не звать
+     * searchKnowledge по инструкции в системном промпте — с локальной
+     * моделью это мягкая рекомендация, а не гарантия. Явная проверка
+     * до запуска агента детерминированно отсекает нерелевантные
+     * вопросы ДО того, как запускается дорогой RAG-пайплайн (чтение
+     * PDF, эмбеддинги, reranking), а не после.
+     */
+    suspend fun classifyAgronomic(
+        question: String
+    ): Boolean {
+
+        val prompt = """
+            Определи, относится ли вопрос пользователя к агрономии —
+            болезням растений, вредителям, симптомам, возбудителям,
+            мерам борьбы, лечению, профилактике, выращиванию культур
+            или уходу за ними.
+
+            Верни ТОЛЬКО JSON без Markdown и без ```.
+
+            Формат:
+
+            {
+              "agronomic": true
+            }
+
+            или:
+
+            {
+              "agronomic": false
+            }
+
+            Вопрос:
+            $question
+        """.trimIndent()
+
+        val response: ChatResponseMessage =
+            client.post("$OLLAMA_URL/api/chat") {
+
+                contentType(ContentType.Application.Json)
+
+                setBody(
+                    ChatRequest(
+                        model = CHAT_MODEL,
+                        messages = listOf(
+                            ChatMessage(
+                                role = "user",
+                                content = prompt
+                            )
+                        ),
+                        stream = false,
+                        options = ChatOptions(temperature = 0.0, numCtx = OLLAMA_NUM_CTX)
+                    )
+                )
+            }
+                .body()
+
+        val raw = response.message.content
+
+        println("\n[domain gate raw]")
+        println(raw)
+
+        return try {
+            Json.decodeFromString<DomainClassification>(
+                raw.cleanJsonResponse()
+            ).agronomic
+        } catch (_: Exception) {
+            println("[domain gate] invalid JSON, по умолчанию пропускаем как agronomic")
+            true
         }
     }
 

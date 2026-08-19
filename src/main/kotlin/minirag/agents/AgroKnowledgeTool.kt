@@ -17,6 +17,7 @@ import minirag.retrieval.Retriever
 import minirag.retrieval.buildCandidatePool
 import minirag.retrieval.buildContext
 import minirag.retrieval.gateRelevant
+import kotlin.system.measureTimeMillis
 
 @LLMDescription(
     "Инструмент поиска информации в локальной базе знаний."
@@ -63,17 +64,23 @@ class AgroKnowledgeTool(
          * 1-3. Query analysis -> dense + lexical retrieval
          * по каждому подзапросу -> candidate pool.
          */
-        val candidates =
-            buildCandidatePool(
-                question = query,
-                ollama = ollama,
-                retriever = retriever,
-                lexicalRetriever = lexicalRetriever,
-                chunks = chunks,
-                chunkVecs = chunkVecs
-            )
+        var candidates: List<minirag.models.RetrievedChunk> = emptyList()
+        val candidatePoolMs = measureTimeMillis {
+            candidates =
+                buildCandidatePool(
+                    question = query,
+                    ollama = ollama,
+                    retriever = retriever,
+                    lexicalRetriever = lexicalRetriever,
+                    chunks = chunks,
+                    chunkVecs = chunkVecs
+                )
+        }
 
-        println("[searchKnowledge] candidate pool: ${candidates.size}")
+        println(
+            "[searchKnowledge] candidate pool: ${candidates.size} " +
+                    "(decompose+retrieval: ${candidatePoolMs}мс)"
+        )
 
         if (candidates.isEmpty()) {
             val result = NO_RELEVANT_CONTEXT_MESSAGE
@@ -85,13 +92,17 @@ class AgroKnowledgeTool(
          * 4. Cross-encoder reranking относительно исходного
          * вопроса + accept/reject по откалиброванному threshold.
          */
-        val reranked =
-            reranker.rerank(
-                query = query,
-                candidates = candidates,
-                chunks = chunks,
-                threshold = relevanceThreshold
-            )
+        var reranked: List<RerankResult> = emptyList()
+        val rerankMs = measureTimeMillis {
+            reranked =
+                reranker.rerank(
+                    query = query,
+                    candidates = candidates,
+                    chunks = chunks,
+                    threshold = relevanceThreshold
+                )
+        }
+        println("[searchKnowledge] reranker: ${rerankMs}мс")
 
         /*
          * 5. RelevanceGate: RELEVANT / NOT_RELEVANT.
@@ -150,6 +161,7 @@ class AgroKnowledgeTool(
  * вопросе один из них может вытеснить другой ещё до того, как
  * реально релевантный chunk другой болезни доберётся до контекста.
  */
+@Suppress("SameParameterValue")
 private fun capPerSection(
     results: List<RerankResult>,
     chunksById: Map<Int, DocumentChunk>,

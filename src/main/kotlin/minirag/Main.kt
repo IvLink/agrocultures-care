@@ -4,11 +4,14 @@ import ai.koog.agents.core.agent.AIAgent
 import ai.koog.agents.core.tools.ToolRegistry
 import ai.koog.http.client.HttpClientFactoryResolver
 import ai.koog.prompt.executor.llms.MultiLLMPromptExecutor
+import ai.koog.prompt.executor.ollama.client.ContextWindowStrategy
 import ai.koog.prompt.llm.LLMCapability
 import ai.koog.prompt.llm.LLMProvider
 import ai.koog.prompt.llm.LLModel
 import minirag.agents.AgroKnowledgeTool
 import minirag.bge_reranker.BgeReranker
+import minirag.config.CHAT_MODEL
+import minirag.config.OLLAMA_NUM_CTX
 import minirag.config.RELEVANCE_THRESHOLD
 import minirag.config.createHttpClient
 import minirag.eval.GroundednessJudge
@@ -26,7 +29,7 @@ import kotlin.system.measureTimeMillis
 
 val gemma4 = LLModel(
     provider = LLMProvider.Ollama,
-    id = "gemma4:latest",
+    id = CHAT_MODEL,
     capabilities = listOf(
         LLMCapability.Temperature,
         LLMCapability.Schema.JSON.Basic,
@@ -55,6 +58,30 @@ suspend fun main() {
     print("Твой вопрос к документу: ")
     val question = readlnOrNull().orEmpty()
         .trim()
+
+    /*
+     * Domain gate: отдельный дешёвый классификационный запрос ДО
+     * запуска дорогого пайплайна (PDF -> чанки -> эмбеддинги ->
+     * калибровка -> agent), а не системный промпт агента как
+     * единственная защита — с локальной моделью это лишь мягкая
+     * рекомендация, а не гарантия, что tool-calling агент сам решит
+     * не звать searchKnowledge на нерелевантный вопрос.
+     */
+    val isAgronomic: Boolean
+    val gateElapsedMs = measureTimeMillis {
+        isAgronomic = ollama.classifyAgronomic(question)
+    }
+    println("[domain gate] agronomic=$isAgronomic (${gateElapsedMs}мс)")
+
+    if (!isAgronomic) {
+        println(
+            "Вопрос не относится к агрономической базе знаний — " +
+                    "пропускаю PDF/эмбеддинги/агент."
+        )
+        reranker.close()
+        ollama.close()
+        return
+    }
 
     println("[1/4] читаю PDF...")
     val pages = readPdfPages(pdfPath)
@@ -127,7 +154,16 @@ suspend fun main() {
     )
 
     @Suppress("UnstableApiUsage")
-    val ollamaKoog = OllamaClientKoog(httpClientFactory = loggingFactory)
+    val ollamaKoog = OllamaClientKoog(
+        httpClientFactory = loggingFactory,
+        /*
+         * Без явного num_ctx Ollama сама выбирает размер контекстного
+         * окна (см. AppConfig.OLLAMA_NUM_CTX) — на этой машине это
+         * заставляло ~72% слоёв модели уходить на CPU, потому что
+         * KV-cache под такой контекст не помещался в VRAM видеокарты.
+         */
+        contextWindowStrategy = ContextWindowStrategy.Companion.Fixed(OLLAMA_NUM_CTX)
+    )
 
     val agent = AIAgent(
         promptExecutor = MultiLLMPromptExecutor(ollamaKoog),
@@ -173,13 +209,16 @@ suspend fun main() {
 
     lateinit var evalRun: minirag.models.AgentRunResult
     lateinit var groundedness: minirag.models.GroundednessJudgeResult
-    val answerMs = measureTimeMillis {
+
+    val agentMs = measureTimeMillis {
         evalRun = runAgentForEval(
             agent = agent,
             agroTool = agroTool,
             question = question
         )
+    }
 
+    val groundednessMs = measureTimeMillis {
         val groundednessJudge = GroundednessJudge(
             promptExecutor = MultiLLMPromptExecutor(ollamaKoog),
             model = gemma4
@@ -191,6 +230,8 @@ suspend fun main() {
             answer = evalRun.answer
         )
     }
+
+    val answerMs = agentMs + groundednessMs
 
     println()
     println("========== TOOL ==========")
@@ -216,11 +257,14 @@ suspend fun main() {
 
     println()
     println("========== TIMING ==========")
+    println("domain gate: ${gateElapsedMs}мс")
     println("эмбеддинги: ${embeddingsMs}мс")
     println(
         if (skipCalibration) "калибровка: пропущена"
         else "калибровка: ${calibrationMs}мс"
     )
+    println("  agent (tool-call + final answer): ${agentMs}мс")
+    println("  groundedness judge: ${groundednessMs}мс")
     println("ответ на вопрос: ${answerMs}мс")
     println("=============================")
 

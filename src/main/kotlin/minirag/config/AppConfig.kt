@@ -65,3 +65,16 @@ const val RERANK_MAX_TOKENS = 512
 const val RELEVANCE_THRESHOLD = 0.3396f
 
 const val OLLAMA_URL = "http://localhost:11434"
+
+/*
+ * Без явного num_ctx Ollama сама решает размер контекстного окна
+ * (по умолчанию/настройкам модели) — на этой машине это оказалось
+ * 65536, из-за чего KV-cache не влезал в 6GB VRAM видеокарты и
+ * ~72% слоёв модели уходило на CPU (замерено через `ollama ps`:
+ * "72%/28% CPU/GPU"). С явным num_ctx=8192 — "100% GPU", и то же
+ * самое обращение к модели идёт заметно быстрее. 8192 — с запасом
+ * относительно system prompt + до 6 chunks retrieved context +
+ * эхо tool result в истории диалога агента, но всё ещё помещается
+ * в VRAM целиком.
+ */
+const val OLLAMA_NUM_CTX = 8192L

@@ -1,5 +1,6 @@
 package minirag.models
 
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 @Serializable
@@ -23,7 +24,10 @@ data class ChatRequest(
 )
 
 @Serializable
-data class ChatOptions(val temperature: Double)
+data class ChatOptions(
+    val temperature: Double,
+    @SerialName("num_ctx") val numCtx: Long? = null
+)
 
 @Serializable
 data class AgroSearchArgs(val query: String)
@@ -32,4 +36,9 @@ data class AgroSearchArgs(val query: String)
 data class GroundednessJudgeResult(
     val grounded: Boolean,
     val unsupportedClaims: List<String>
+)
+
+@Serializable
+data class DomainClassification(
+    val agronomic: Boolean
 )
