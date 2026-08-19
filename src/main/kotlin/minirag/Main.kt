@@ -9,6 +9,7 @@ import ai.koog.prompt.llm.LLMProvider
 import ai.koog.prompt.llm.LLModel
 import minirag.agents.AgroKnowledgeTool
 import minirag.bge_reranker.BgeReranker
+import minirag.config.RELEVANCE_THRESHOLD
 import minirag.config.createHttpClient
 import minirag.eval.GroundednessJudge
 import minirag.eval.calibrateThreshold
@@ -21,6 +22,7 @@ import minirag.strategy.agroStrategy
 import minirag.eval.runAgentForEval
 import minirag.text.splitIntoChunks
 import ai.koog.prompt.executor.ollama.client.OllamaClient as OllamaClientKoog
+import kotlin.system.measureTimeMillis
 
 val gemma4 = LLModel(
     provider = LLMProvider.Ollama,
@@ -62,10 +64,13 @@ suspend fun main() {
     val chunks = splitIntoChunks(pages)
     println("      чанков: ${chunks.size}")
 
-    println("[3/4] считаю эмбеддинги...")
-    val chunkVecs = ollama.embedAll(
-        chunks.map { it.retrievalText() }
-    )
+    var chunkVecs: List<List<Double>> = emptyList()
+    val embeddingsMs = measureTimeMillis {
+        println("[3/4] считаю эмбеддинги...")
+        chunkVecs = ollama.embedAll(
+            chunks.map { it.retrievalText() }
+        )
+    }
 
     println(
         "      векторов: ${chunkVecs.size}, " +
@@ -74,15 +79,35 @@ suspend fun main() {
 
     val lexicalRetriever = LexicalRetriever(chunks)
 
-    println("[4/4] калибрую relevance threshold по eval-набору...")
-    val calibration = calibrateThreshold(
-        ollama = ollama,
-        retriever = retriever,
-        lexicalRetriever = lexicalRetriever,
-        reranker = reranker,
-        chunks = chunks,
-        chunkVecs = chunkVecs
-    )
+    /*
+     * calibrateThreshold — это верификация/подбор RELEVANCE_THRESHOLD
+     * (см. minirag.eval.RerankerCalibration), а не часть прод-ответа:
+     * она прогоняет ПОЛНЫЙ pipeline (decompose -> retrieval -> rerank)
+     * ещё раз для 7 eval-запросов, что на практике оказывается дороже
+     * самого ответа на вопрос пользователя. SKIP_CALIBRATION позволяет
+     * пропустить эту проверку и сразу использовать текущий откалиброванный
+     * RELEVANCE_THRESHOLD из AppConfig.kt — на прод-ответ это не влияет,
+     * влияет только на то, проверяем ли мы актуальность порога здесь и сейчас.
+     */
+    val skipCalibration = System.getenv("SKIP_CALIBRATION") == "1"
+
+    var threshold = RELEVANCE_THRESHOLD
+    val calibrationMs = measureTimeMillis {
+        if (skipCalibration) {
+            println("[4/4] калибровка пропущена (SKIP_CALIBRATION=1), " +
+                    "используется RELEVANCE_THRESHOLD=$RELEVANCE_THRESHOLD")
+        } else {
+            println("[4/4] калибрую relevance threshold по eval-набору...")
+            threshold = calibrateThreshold(
+                ollama = ollama,
+                retriever = retriever,
+                lexicalRetriever = lexicalRetriever,
+                reranker = reranker,
+                chunks = chunks,
+                chunkVecs = chunkVecs
+            ).threshold
+        }
+    }
 
     val agroTool = AgroKnowledgeTool(
         ollama = ollama,
@@ -91,7 +116,7 @@ suspend fun main() {
         reranker = reranker,
         chunks = chunks,
         chunkVecs = chunkVecs,
-        relevanceThreshold = calibration.threshold
+        relevanceThreshold = threshold
     )
 
     @Suppress("UnstableApiUsage")
@@ -146,22 +171,26 @@ suspend fun main() {
         strategy = agroStrategy,
     )
 
-    val evalRun = runAgentForEval(
-        agent = agent,
-        agroTool = agroTool,
-        question = question
-    )
+    lateinit var evalRun: minirag.models.AgentRunResult
+    lateinit var groundedness: minirag.models.GroundednessJudgeResult
+    val answerMs = measureTimeMillis {
+        evalRun = runAgentForEval(
+            agent = agent,
+            agroTool = agroTool,
+            question = question
+        )
 
-    val groundednessJudge = GroundednessJudge(
-        promptExecutor = MultiLLMPromptExecutor(ollamaKoog),
-        model = gemma4
-    )
+        val groundednessJudge = GroundednessJudge(
+            promptExecutor = MultiLLMPromptExecutor(ollamaKoog),
+            model = gemma4
+        )
 
-    val groundedness = groundednessJudge.evaluate(
-        question = question,
-        context = evalRun.retrievedContext,
-        answer = evalRun.answer
-    )
+        groundedness = groundednessJudge.evaluate(
+            question = question,
+            context = evalRun.retrievedContext,
+            answer = evalRun.answer
+        )
+    }
 
     println()
     println("========== TOOL ==========")
@@ -184,6 +213,16 @@ suspend fun main() {
     }
 
     println("==================================")
+
+    println()
+    println("========== TIMING ==========")
+    println("эмбеддинги: ${embeddingsMs}мс")
+    println(
+        if (skipCalibration) "калибровка: пропущена"
+        else "калибровка: ${calibrationMs}мс"
+    )
+    println("ответ на вопрос: ${answerMs}мс")
+    println("=============================")
 
     agent.close()
     reranker.close()

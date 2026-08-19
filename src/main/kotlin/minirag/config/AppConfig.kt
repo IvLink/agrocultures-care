@@ -62,6 +62,6 @@ const val RERANK_MAX_TOKENS = 512
  * и подбирает порог по фактическому разрыву между их score.
  * Замените это значение на то, что выведет калибровка.
  */
-const val RELEVANCE_THRESHOLD = 0.5f
+const val RELEVANCE_THRESHOLD = 0.3396f
 
 const val OLLAMA_URL = "http://localhost:11434"
