@@ -22,36 +22,66 @@ import minirag.models.DocumentPage
  */
 fun splitIntoChunks(pages: List<DocumentPage>): List<DocumentChunk> {
 
+    val normalizedPages = pages
+        .map { it.number to normalizeText(it.text) }
+        .filter { it.second.isNotBlank() }
+
+    if (normalizedPages.isEmpty()) {
+        return emptyList()
+    }
+
+    /*
+     * Раздел, с которого в этом документе ЭМПИРИЧЕСКИ начинается
+     * любая запись — выводится из самого документа (первый раздел
+     * первой встреченной последовательности), а не хардкодится
+     * ("Возбудитель болезни" в частности) — см. discoverFirstSection
+     * и её использование в resolveZoneOnStrayTitle.
+     */
+    val firstSectionMarker = discoverFirstSection(
+        normalizedPages.map { it.second }
+    )
+
+    val blocks = splitIntoSectionBlocks(normalizedPages, firstSectionMarker)
+
     var nextChunkId = 0
     val result = mutableListOf<DocumentChunk>()
 
-    for (page in pages) {
+    for (block in blocks) {
+        chunkText(block.text)
+            .forEach { text ->
 
-        val normalized = normalizeText(page.text)
-
-        if (normalized.isBlank()) {
-            continue
-        }
-
-        val pageBlocks = splitIntoSectionBlocks(normalized)
-
-        for (block in pageBlocks.blocks) {
-
-            chunkText(block.text)
-                .forEach { text ->
-
-                    result += DocumentChunk(
-                        id = nextChunkId++,
-                        page = page.number,
-                        text = text,
-                        section = block.section,
-                        title = pageBlocks.strayTitle
-                    )
-                }
-        }
+                result += DocumentChunk(
+                    id = nextChunkId++,
+                    page = block.page,
+                    text = text,
+                    section = block.section,
+                    title = block.title
+                )
+            }
     }
 
     return result
+}
+
+/*
+ * Порядок разделов внутри записи в этих документах ПОСТОЯНЕН
+ * (например, всегда "Возбудитель болезни" -> "Распространение" ->
+ * "Симптомы" -> "Условия развития болезни" -> "Меры борьбы"), но
+ * какие именно это разделы и в каком порядке — знание конкретного
+ * документа, а не универсальная константа. Поэтому раздел, которым
+ * запись начинается, выводится из самого документа: это первый
+ * заголовок, который вообще встречается при последовательном чтении
+ * всех страниц — используется дальше как сигнал "эта последовательность
+ * блоков начинается с начала записи, а не с середины" (см.
+ * resolveZoneOnStrayTitle).
+ */
+private fun discoverFirstSection(pageTexts: List<String>): String? {
+    for (text in pageTexts) {
+        for (line in text.split('\n')) {
+            detectSectionHeading(line)?.let { return it }
+        }
+    }
+    return null
 }
 
 private fun normalizeText(text: String): String {
@@ -64,8 +94,10 @@ private fun normalizeText(text: String): String {
 }
 
 private data class SectionBlock(
+    val page: Int,
     val section: String?,
-    val text: String
+    val text: String,
+    val title: String?
 )
 
 /*
@@ -143,40 +175,78 @@ private fun looksLikeStrayTitleLine(
         return false
     }
 
-    if (nextNonBlankLine != null && nextNonBlankLine.first().isLowerCase()) {
+    /*
+     * Смотрим на регистр первой БУКВЫ следующей строки, а не первого
+     * символа буквально — перенос предложения может продолжиться
+     * после открывающей скобки/кавычки ("(хлороза) листьев..." —
+     * первый символ '(', но первая буква "х" строчная и это всё
+     * ещё продолжение предложения, а не новый самостоятельный
+     * заголовок).
+     */
+    val nextLineFirstLetter = nextNonBlankLine?.firstOrNull { it.isLetter() }
+    if (nextLineFirstLetter != null && nextLineFirstLetter.isLowerCase()) {
         return false
     }
 
     return true
 }
 
-private data class PageBlocks(
-    val blocks: List<SectionBlock>,
-    val strayTitle: String?
-)
-
+/*
+ * Заголовок записи в этом документе встречается в тексте в ДВУХ
+ * взаимоисключающих позициях (обе — известный побочный эффект
+ * PDFTextStripper, см. комментарий у looksLikeStrayTitleLine):
+ *
+ * - "в хвосте своей же записи" (частый случай): Возбудитель ->
+ *   ... -> Меры борьбы -> заголовок записи. Заголовок нужно
+ *   применить ЗАДНИМ ЧИСЛОМ ко всему, что только что накопили.
+ * - "перед разделами записи" (редкий случай — например, когда
+ *   на одной странице заканчивается одна запись и сразу же
+ *   начинается другая): заголовок предшествует своим разделам,
+ *   и относится к тому, что будет накапливаться ПОСЛЕ него, а не
+ *   к обрывку предыдущей записи, который уже накоплен до него.
+ *
+ * Локально (по одной этой строке) эти два случая неразличимы —
+ * в обоих строка структурно выглядит одинаково. Различить их можно
+ * только посмотрев, с чего НАЧАЛАСЬ уже накопленная последовательность
+ * разделов (currentZone): если она начинается с раздела, которым
+ * ЭМПИРИЧЕСКИ (см. discoverFirstSection) начинается любая запись
+ * в этом документе — это самостоятельная, цельная запись, и найденная
+ * строка — её собственный "уехавший" заголовок (первый случай).
+ * Если зона начинается с чего-то другого (например, зона — это всего
+ * один "хвостовой" раздел без начала) — это обрывок уже идущей записи,
+ * и он остаётся под уже известным title, а найденная строка относится
+ * к тому, что пойдёт ПОСЛЕ неё (второй случай).
+ */
 private fun splitIntoSectionBlocks(
-    pageText: String
-): PageBlocks {
-
-    val lines = pageText.split('\n')
+    pages: List<Pair<Int, String>>,
+    firstSectionMarker: String?
+): List<SectionBlock> {
 
     val blocks = mutableListOf<SectionBlock>()
 
     var currentSection: String? = null
+    var currentTitle: String? = null
+
+    // Состояние текущей "зоны" — блоков со времени последнего
+    // определённого title, ещё не привязанных окончательно.
+    var zoneStartIndex = 0
+    var zoneFirstSection: String? = null
+    var seenSectionsInZone = mutableSetOf<String>()
+
     var buffer = StringBuilder()
     var bufferHasContent = false
     var previousLineEndedSentence = false
-    var strayTitle: String? = null
 
-    fun flush() {
+    fun flush(page: Int) {
 
         val text = buffer.toString().trim()
 
         if (text.isNotBlank()) {
             blocks += SectionBlock(
+                page = page,
                 section = currentSection,
-                text = text
+                text = text,
+                title = currentTitle
             )
         }
 
@@ -184,71 +254,92 @@ private fun splitIntoSectionBlocks(
         bufferHasContent = false
     }
 
-    for (index in lines.indices) {
+    fun startNewZone(newTitle: String?) {
+        currentTitle = newTitle
+        zoneStartIndex = blocks.size
+        zoneFirstSection = null
+        seenSectionsInZone = mutableSetOf()
+    }
 
-        val rawLine = lines[index]
-        val trimmedLine = rawLine.trim()
-        val heading = detectSectionHeading(rawLine)
+    fun resolveZoneOnStrayTitle(newTitleLine: String) {
+        if (zoneFirstSection != null && zoneFirstSection == firstSectionMarker) {
+            for (i in zoneStartIndex until blocks.size) {
+                blocks[i] = blocks[i].copy(title = newTitleLine)
+            }
+        }
+        startNewZone(newTitleLine)
+    }
 
-        if (heading != null) {
-            flush()
-            currentSection = heading
-            previousLineEndedSentence = false
+    for ((page, pageText) in pages) {
+
+        val lines = pageText.split('\n')
+
+        for (index in lines.indices) {
+
+            val rawLine = lines[index]
+            val trimmedLine = rawLine.trim()
+            val heading = detectSectionHeading(rawLine)
+
+            if (heading != null) {
+                flush(page)
+                /*
+                 * Раздел встречается в записи ровно один раз. Его
+                 * повтор внутри одной зоны невозможен для настоящей
+                 * записи — значит формально началась новая, даже
+                 * если её собственный "уехавший" заголовок не пойман.
+                 * Здесь у нас нет строки-кандидата на имя новой
+                 * записи, поэтому title честно уходит в null, а не
+                 * остаётся неверным, но правдоподобным.
+                 */
+                if (heading in seenSectionsInZone) {
+                    startNewZone(null)
+                }
+                currentSection = heading
+                if (zoneFirstSection == null) {
+                    zoneFirstSection = heading
+                }
+                seenSectionsInZone += heading
+                previousLineEndedSentence = false
+                buffer.append(rawLine).append('\n')
+                continue
+            }
+
+            if (
+                bufferHasContent &&
+                previousLineEndedSentence &&
+                looksLikeStrayTitleLine(
+                    trimmed = trimmedLine,
+                    nextNonBlankLine = lines
+                        .asSequence()
+                        .drop(index + 1)
+                        .map { it.trim() }
+                        .firstOrNull { it.isNotEmpty() }
+                )
+            ) {
+                flush(page)
+                resolveZoneOnStrayTitle(trimmedLine)
+                currentSection = null
+            }
+
             buffer.append(rawLine).append('\n')
-            continue
+
+            if (trimmedLine.isNotEmpty()) {
+                bufferHasContent = true
+                previousLineEndedSentence = trimmedLine.last() in sentenceTerminators
+            }
         }
 
         /*
-         * Строка похожа на заголовок записи, "уехавший" в хвост
-         * текущего раздела: у нас уже есть тело раздела, оно
-         * закончено законченным предложением, а эта строка сама
-         * на предложение не похожа и не продолжается следующей
-         * строкой. Отрезаем её вместе со всем, что после неё,
-         * в отдельный блок — не даём ей "загрязнить" смысл
-         * текущего раздела, и запоминаем как заголовок записи
-         * для всех chunks этой страницы.
+         * chunk не должен растягиваться на две разные страницы —
+         * поэтому буфер закрывается на границе страницы всегда,
+         * но title-зона (currentTitle/zoneStartIndex/...) продолжается
+         * и на следующей странице: запись может начинаться на одной
+         * странице и продолжаться на следующей.
          */
-        if (
-            strayTitle == null &&
-            bufferHasContent &&
-            previousLineEndedSentence &&
-            looksLikeStrayTitleLine(
-                trimmed = trimmedLine,
-                nextNonBlankLine = lines
-                    .asSequence()
-                    .drop(index + 1)
-                    .map { it.trim() }
-                    .firstOrNull { it.isNotEmpty() }
-            )
-        ) {
-            flush()
-            strayTitle = trimmedLine
-            currentSection = null
-        }
-
-        buffer.append(rawLine).append('\n')
-
-        if (trimmedLine.isNotEmpty()) {
-            bufferHasContent = true
-            previousLineEndedSentence = trimmedLine.last() in sentenceTerminators
-        }
+        flush(page)
     }
 
-    flush()
-
-    if (blocks.isEmpty()) {
-        return PageBlocks(
-            blocks = listOf(
-                SectionBlock(
-                    section = null,
-                    text = pageText
-                )
-            ),
-            strayTitle = strayTitle
-        )
-    }
-
-    return PageBlocks(blocks = blocks, strayTitle = strayTitle)
+    return blocks
 }
 
 private fun chunkText(text: String): List<String> {
