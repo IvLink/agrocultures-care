@@ -141,6 +141,15 @@ class AgroKnowledgeTool(
     }
 }
 
+/*
+ * Капается по паре (title, section), а не по голому section:
+ * справочник переиспользует одни и те же названия разделов
+ * ("Симптомы", "Меры борьбы") для каждой болезни/сущности, поэтому
+ * капание по одному section значило бы, что "Симптомы" болезни A
+ * и "Симптомы" болезни B делят один и тот же слот — и в составном
+ * вопросе один из них может вытеснить другой ещё до того, как
+ * реально релевантный chunk другой болезни доберётся до контекста.
+ */
 private fun capPerSection(
     results: List<RerankResult>,
     chunksById: Map<Int, DocumentChunk>,
@@ -148,20 +157,21 @@ private fun capPerSection(
     maxTotal: Int
 ): List<RerankResult> {
 
-    val perSectionCount = mutableMapOf<String?, Int>()
+    val perSectionCount = mutableMapOf<Pair<String?, String?>, Int>()
     val selected = mutableListOf<RerankResult>()
 
     for (result in results) {
         if (selected.size >= maxTotal) {
             break
         }
-        val section = chunksById[result.chunkId]?.section
-        val count = perSectionCount.getOrDefault(section, 0)
+        val chunk = chunksById[result.chunkId]
+        val sectionKey = chunk?.title to chunk?.section
+        val count = perSectionCount.getOrDefault(sectionKey, 0)
         if (count >= maxPerSection) {
             continue
         }
         selected += result
-        perSectionCount[section] = count + 1
+        perSectionCount[sectionKey] = count + 1
     }
 
     return selected
