@@ -154,29 +154,44 @@ class OllamaClient(private val client: HttpClient) {
      * до запуска агента детерминированно отсекает нерелевантные
      * вопросы ДО того, как запускается дорогой RAG-пайплайн (чтение
      * PDF, эмбеддинги, reranking), а не после.
+     *
+     * needsDocument добавлен туда же (не отдельным вызовом), чтобы
+     * не платить второй LLM-запрос: вопросы только про цену/наличие/
+     * покупку (webSearch) не требуют содержимого локального документа,
+     * и для них можно пропустить чтение PDF + эмбеддинги (см. вызывающий
+     * код в Main.kt) — это самая дорогая часть пайплайна (~80с).
      */
     suspend fun classifyAgronomic(
         question: String
-    ): Boolean {
+    ): DomainClassification {
 
         val prompt = """
-            Определи, относится ли вопрос пользователя к агрономии —
-            болезням растений, вредителям, симптомам, возбудителям,
-            мерам борьбы, лечению, профилактике, выращиванию культур
-            или уходу за ними.
+            Определи два признака вопроса пользователя:
+
+            1. agronomic — относится ли вопрос к агрономии: болезням
+               растений, вредителям, симптомам, возбудителям, мерам
+               борьбы, лечению, профилактике, выращиванию культур или
+               уходу за ними.
+            2. needsDocument — нужна ли для ответа информация ИЗ
+               ЛОКАЛЬНОГО СПРАВОЧНИКА (описание болезни, симптомы,
+               возбудители, условия развития, меры борьбы, лечение,
+               профилактика — стабильные факты, не привязанные к
+               текущему моменту). false, если вопрос ТОЛЬКО про
+               актуальную цену, наличие или место покупки препарата —
+               это не содержание справочника, а данные из интернета.
+
+            Примеры:
+            "Какие симптомы фитофтороза?" -> agronomic=true, needsDocument=true
+            "Сколько стоит препарат от фитофтороза?" -> agronomic=true, needsDocument=false
+            "Какие симптомы и где купить средство от фитофтороза?" -> agronomic=true, needsDocument=true
 
             Верни ТОЛЬКО JSON без Markdown и без ```.
 
             Формат:
 
             {
-              "agronomic": true
-            }
-
-            или:
-
-            {
-              "agronomic": false
+              "agronomic": true,
+              "needsDocument": true
             }
 
             Вопрос:
@@ -212,10 +227,12 @@ class OllamaClient(private val client: HttpClient) {
         return try {
             Json.decodeFromString<DomainClassification>(
                 raw.cleanJsonResponse()
-            ).agronomic
+            )
         } catch (_: Exception) {
-            println("[domain gate] invalid JSON, по умолчанию пропускаем как agronomic")
-            true
+            println(
+                "[domain gate] invalid JSON, по умолчанию agronomic=true, needsDocument=true"
+            )
+            DomainClassification(agronomic = true, needsDocument = true)
         }
     }
 

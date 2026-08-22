@@ -9,3 +9,6 @@
 # Reranker ONNX weights/tokenizer — too large for git, see models/README.md
 /models/bge_reranker_v2_m3/onnx/model.onnx_data
 /models/bge_reranker_v2_m3/tokenizer.json
+
+# Project planning doc, not part of the codebase
+/AI_Android_AgroAI_6_Month_Plan.md

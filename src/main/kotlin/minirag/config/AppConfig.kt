@@ -78,3 +78,61 @@ const val OLLAMA_URL = "http://localhost:11434"
  * в VRAM целиком.
  */
 const val OLLAMA_NUM_CTX = 8192L
+
+/*
+ * ЗАДЕПРЕЧЕНО: аккаунт Yandex Cloud требует верификацию оплаты, которая
+ * отклоняет украинские номера телефона и виртуальные/сервисные номера
+ * ("введите реальные данные") — пополнить баланс из Украины не удаётся.
+ * Оставлено только как справка/на случай если ограничение снимут;
+ * см. minirag.web.YandexSearchClient. Активный провайдер — Serper
+ * (см. SERPER_* ниже).
+ */
+const val YANDEX_SEARCH_URL =
+    "https://searchapi.api.cloud.yandex.net/v2/web/search"
+
+const val YANDEX_SEARCH_API_KEY_ENV =
+    "YANDEX_SEARCH_API_KEY"
+
+const val YANDEX_SEARCH_FOLDER_ID_ENV =
+    "YANDEX_SEARCH_FOLDER_ID"
+
+const val YANDEX_SEARCH_REGION_ENV =
+    "YANDEX_SEARCH_REGION"
+
+const val YANDEX_SEARCH_TYPE_ENV =
+    "YANDEX_SEARCH_TYPE"
+
+/*
+ * /shopping, а не /search: для сценариев этого тула (цена/наличие/
+ * где купить) обычный органический поиск для целевого региона был
+ * либо пуст (gl=by), либо в основном мусор — блоги/соцсети/нерелевант
+ * (gl=ru с полным вопросом). Google Shopping возвращает структурированные
+ * карточки товаров (цена+магазин) и естественным образом не содержит
+ * соцсетей — на живом тесте с gl=ua дал 40/40 релевантных результатов.
+ */
+const val SERPER_SHOPPING_URL =
+    "https://google.serper.dev/shopping"
+
+const val SERPER_API_KEY_ENV =
+    "SERPER_API_KEY"
+
+/*
+ * gl/hl — страна и язык выдачи Google (см. документацию Serper).
+ * "by"/"ru" по умолчанию: подтверждено рабочим запросом из Беларуси,
+ * справочник и целевая аудитория — на русском.
+ */
+const val SERPER_GL_ENV = "SERPER_GL"
+const val SERPER_HL_ENV = "SERPER_HL"
+/*
+ * "by" давал почти пустую/нерелевантную выдачу даже для точечных
+ * товарных запросов ("фунгицид фитофтора купить" -> 2 нерелевантных
+ * результата, один с украинского домена) — похоже, Google слабо
+ * индексирует белорусские магазины. "ua" ближе к реальному
+ * местоположению пользователя.
+ */
+const val SERPER_DEFAULT_GL = "ua"
+const val SERPER_DEFAULT_HL = "ru"
+
+const val SERPER_DEFAULT_RECENCY = "w"
+
+const val WEB_SEARCH_DEFAULT_LIMIT = 5

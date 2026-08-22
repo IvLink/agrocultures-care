@@ -40,5 +40,11 @@ data class GroundednessJudgeResult(
 
 @Serializable
 data class DomainClassification(
-    val agronomic: Boolean
+    val agronomic: Boolean,
+    val needsDocument: Boolean = true
+)
+@Serializable
+data class WebSearchArgs(
+    val query: String,
+    val recency: String? = null
 )

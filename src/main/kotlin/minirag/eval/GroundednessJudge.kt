@@ -20,14 +20,19 @@ class GroundednessJudge(
         answer: String
     ): GroundednessJudgeResult {
 
-        if (context.isNullOrBlank()) {
-            return GroundednessJudgeResult(
-                grounded = false,
-                unsupportedClaims = listOf(
-                    "Ответ сформирован без результата searchKnowledge."
-                )
-            )
-        }
+        /*
+         * Раньше пустой context сразу давал grounded=false — это было
+         * верно, пока context мог прийти только от searchKnowledge
+         * (не вызван -> точно нечем подкрепить ответ). Теперь context
+         * может отсутствовать и в легитимном случае: webSearch честно
+         * вернул "результатов нет", а ANSWER это признаёт, ничего не
+         * выдумывая — такой ответ обязан считаться grounded. Поэтому
+         * решение отдаётся LLM (см. правило 8/9 в системном промпте
+         * ниже), а не жёсткому шорткату здесь.
+         */
+        val effectiveContext = context
+            ?.takeIf { it.isNotBlank() }
+            ?: "(ни один инструмент не вернул контекст)"
 
         val evaluationPrompt = prompt("groundedness-eval") {
             system(
@@ -45,6 +50,13 @@ class GroundednessJudge(
                 6. Проверяй также, отвечает ли ANSWER именно на QUESTION.
                 7. Нельзя переносить сведения о другом заболевании на заболевание,
                     указанное в QUESTION.
+                8. Если CONTEXT пуст или указывает, что данных не найдено, а
+                   ANSWER честно сообщает об отсутствии данных и не выдумывает
+                   конкретные факты (цены, названия препаратов, наличие и т.п.) —
+                   это grounded=true: отсутствие фактов не выдано за факт.
+                9. Если же в этой ситуации ANSWER всё равно утверждает
+                   конкретные факты, не подтверждённые CONTEXT — это
+                   grounded=false.
 
                 Формат:
 
@@ -70,8 +82,8 @@ class GroundednessJudge(
                     $question
                 
                     CONTEXT:
-                    $context
-                
+                    $effectiveContext
+
                     ANSWER:
                     $answer
                     """.trimIndent()
