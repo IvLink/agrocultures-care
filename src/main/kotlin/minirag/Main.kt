@@ -166,7 +166,7 @@ suspend fun main() {
     }.second
 
     /*
-     * groundedness judge — отдельная LLM-проверка ПОСЛЕ готового ответа
+     * groundednessJudge — отдельная LLM-проверка ПОСЛЕ готового ответа
      * (не влияет на evalRun.answer), нужна для отладки RAG-пайплайна.
      * В готовом проекте это лишний LLM-вызов на каждый вопрос — можно
      * выключить через SKIP_GROUNDEDNESS=1, как и калибровку.
@@ -376,10 +376,10 @@ private fun buildSystemPrompt(agroAvailable: Boolean, webSearchAvailable: Boolea
     """.trimIndent()
 
     /*
-     * Оба тула опциональны (needsDocument=false отсекает searchKnowledge
+     * Оба инструмента опциональны (needsDocument=false отсекает searchKnowledge
      * ещё до сборки агента, чтобы не гонять PDF/эмбеддинги зря; webSearch
      * недоступен без SERPER_API_KEY) — системный промпт собирается только
-     * из реально доступных тулов, а не описывает несуществующий выбор.
+     * из реально доступных инструментов, а не описывает несуществующий выбор.
      */
     return when {
         agroAvailable && webSearchAvailable -> """
